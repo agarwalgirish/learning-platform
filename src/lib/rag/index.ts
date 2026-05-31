@@ -55,9 +55,11 @@ export async function generateTutorResponse(
 ): Promise<RAGResponse> {
   const topic = context.topicName || 'this topic'
 
-  // For long instruction-style messages (intro prompts), use just the topic name
-  // as the search query — instruction text doesn't embed well against document content
-  const searchQuery = context.query.length > 200
+  // For long instruction-style messages (intro prompts), the query IS the searchHint
+  // (section/document title) already set by the API route. Use it directly.
+  // Only fall back to topic name if the query is still long (plain user chat messages
+  // are short; section intro prompts are long but come in as the searchHint which is short).
+  const searchQuery = context.query.length > 150
     ? topic
     : context.query
 
@@ -78,14 +80,18 @@ export async function generateTutorResponse(
             `[Source ${i + 1}: ${s.documentName}${s.pageNumber ? `, page ${s.pageNumber}` : ''}]\n${s.content}`
         )
         .join('\n\n---\n\n')
-    : `NO DOCUMENTS FOUND — The knowledge base has no uploaded or indexed content for "${topic}" yet.`
+    : `NO DOCUMENTS FOUND — The knowledge base has no indexed content matching this query for "${topic}".`
 
   const systemContent = `${STRICT_TUTOR_PROMPT.replace('[TOPIC]', topic)}
 
 Topic you are teaching: ${topic}
+Search hint used: ${searchQuery}
 Learner's proficiency level: ${context.proficiencyLevel}
 
-${hasContext ? 'KNOWLEDGE BASE CONTEXT (use only this):' : 'KNOWLEDGE BASE STATUS:'}
+${hasContext
+    ? `KNOWLEDGE BASE CONTEXT — teach from this material (${sources.length} sources found):`
+    : 'KNOWLEDGE BASE STATUS — no matching content found:'
+  }
 ${contextText}`
 
   const systemMessage: AIMessage = { role: 'system', content: systemContent }

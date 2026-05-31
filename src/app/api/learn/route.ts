@@ -11,17 +11,19 @@ export async function POST(request: NextRequest) {
   const user = session.user as any
 
   const body = await request.json()
-  const { topicId, message, history = [] } = body as {
+  const { topicId, message, history = [], searchHint } = body as {
     topicId: string
     message: string
     history: TutorMessage[]
+    // Optional: when teaching a specific document section, pass its title so
+    // the vector search targets that document's chunks rather than generic topic
+    searchHint?: string
   }
 
   if (!topicId || !message) {
     return NextResponse.json({ error: 'topicId and message required' }, { status: 400 })
   }
 
-  // Fetch topic name and learner progress in parallel
   const [topic, progress] = await Promise.all([
     db.topic.findUnique({ where: { id: topicId }, select: { name: true } }),
     db.learnerProgress.findUnique({
@@ -32,7 +34,6 @@ export async function POST(request: NextRequest) {
   const topicName = topic?.name ?? 'the topic'
   const proficiencyLevel = progress?.proficiencyLevel ?? 'BEGINNER'
 
-  // Ensure enrollment exists
   await db.enrollment.upsert({
     where: { userId_topicId: { userId: user.id, topicId } },
     create: { userId: user.id, topicId },
@@ -44,6 +45,10 @@ export async function POST(request: NextRequest) {
     { role: 'user', content: message },
   ]
 
+  // Use searchHint for RAG retrieval when available — this ensures we pull chunks
+  // from the specific document being taught, not a generic topic-level query
+  const ragQuery = searchHint ?? message
+
   try {
     const response = await generateTutorResponse(messages, {
       topicId,
@@ -51,10 +56,9 @@ export async function POST(request: NextRequest) {
       organizationId: user.organizationId,
       userId: user.id,
       proficiencyLevel,
-      query: message,
+      query: ragQuery,
     })
 
-    // Update time spent
     await db.learnerProgress.upsert({
       where: { userId_topicId: { userId: user.id, topicId } },
       create: { userId: user.id, topicId, proficiencyLevel, timeSpentMinutes: 2, lastActivityAt: new Date() },

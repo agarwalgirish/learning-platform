@@ -178,10 +178,12 @@ export default function LearnPage() {
       : `Introduce the topic "${topic}" to a ${level} level learner comprehensively.`
 
     try {
+      // searchHint = section title so RAG fetches the right document's chunks
+      const searchHint = sec ? sec.title : topic
       const res = await fetch('/api/learn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topicId, message: prompt, history: [] }),
+        body: JSON.stringify({ topicId, message: prompt, history: [], searchHint }),
       })
       const data = await res.json()
       const content = data.content
