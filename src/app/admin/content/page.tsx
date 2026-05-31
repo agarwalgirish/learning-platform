@@ -127,7 +127,28 @@ function DocumentsTab() {
   const [uploading, setUploading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [dragOver, setDragOver] = useState(false)
+  const [reembedding, setReembedding] = useState(false)
+  const [reembedMsg, setReembedMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+
+  async function reembedAll() {
+    setReembedding(true)
+    setReembedMsg('')
+    try {
+      const res = await fetch('/api/admin/reembed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selectedTopic ? { topicId: selectedTopic } : {}),
+      })
+      const data = await res.json()
+      setReembedMsg(data.message)
+      setTimeout(fetchDocuments, 1000)
+    } catch {
+      setReembedMsg('Re-embedding failed — check server logs')
+    } finally {
+      setReembedding(false)
+    }
+  }
 
   useEffect(() => { fetchTopics(); fetchDocuments() }, [])
   useEffect(() => { fetchDocuments() }, [selectedTopic])
@@ -215,10 +236,30 @@ function DocumentsTab() {
         </div>
       </div>
 
+      {/* Re-embed banner */}
+      {reembedMsg && (
+        <div className="mb-4 px-4 py-3 bg-green-50 border border-green-200 text-green-800 rounded-lg text-sm">
+          {reembedMsg}
+        </div>
+      )}
+
       <div className="bg-card border border-border rounded-xl overflow-hidden">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between">
           <h2 className="font-semibold">{documents.length} Documents</h2>
-          {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          <div className="flex items-center gap-3">
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            <button
+              onClick={reembedAll}
+              disabled={reembedding}
+              title="Re-generate AI embeddings for documents uploaded before OpenAI credits were added"
+              className="flex items-center gap-1.5 text-xs border border-border px-3 py-1.5 rounded-lg hover:bg-accent transition-colors disabled:opacity-50"
+            >
+              {reembedding
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Re-embedding…</>
+                : '⚡ Re-embed documents'
+              }
+            </button>
+          </div>
         </div>
         {documents.length === 0 && !loading ? (
           <div className="text-center py-12">
