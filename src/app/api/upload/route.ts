@@ -101,7 +101,7 @@ async function processDocument(
   // Save extracted text and create chunks
   await db.uploadedDocument.update({
     where: { id: documentId },
-    data: { extractedText: text, pageCount, metadata },
+    data: { extractedText: text, pageCount, metadata: metadata as any },
   })
 
   // Create chunk records
