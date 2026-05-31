@@ -65,12 +65,24 @@ function CoursesTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <p className="font-semibold truncate">{course.name}</p>
-                    <span className={cn(
-                      'text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0',
-                      course.isPublished ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-                    )}>
+                    <button
+                      onClick={async () => {
+                        await fetch(`/api/courses/${course.id}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ isPublished: !course.isPublished }),
+                        })
+                        fetchCourses()
+                      }}
+                      className={cn(
+                        'text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 border transition-colors',
+                        course.isPublished
+                          ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
+                          : 'bg-yellow-50 text-yellow-700 border-yellow-200 hover:bg-yellow-100'
+                      )}
+                    >
                       {course.isPublished ? 'Published' : 'Draft'}
-                    </span>
+                    </button>
                   </div>
                   {course.description && (
                     <p className="text-sm text-muted-foreground line-clamp-1 mb-2">{course.description}</p>

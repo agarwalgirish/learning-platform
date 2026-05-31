@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Plus, Trash2, Upload, Globe, FileText,
-  Loader2, CheckCircle2, GripVertical, ChevronDown, ChevronUp, AlertCircle,
+  Loader2, CheckCircle2, GripVertical, ChevronDown, ChevronUp, AlertCircle, EyeOff,
 } from 'lucide-react'
 import { cn, formatBytes, formatDate } from '@/lib/utils'
 
@@ -180,12 +180,38 @@ export default function CourseEditorPage() {
             </p>
           </div>
         </div>
-        {saveMsg && (
-          <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded-lg">
-            <CheckCircle2 className="h-4 w-4" />
-            {saveMsg}
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {saveMsg && (
+            <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded-lg">
+              <CheckCircle2 className="h-4 w-4" />
+              {saveMsg}
+            </div>
+          )}
+          <button
+            onClick={async () => {
+              await fetch(`/api/courses/${courseId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ isPublished: !course.isPublished }),
+              })
+              await load()
+              setSaveMsg(course.isPublished ? 'Course unpublished' : 'Course published ✓')
+              setTimeout(() => setSaveMsg(''), 3000)
+            }}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors',
+              course.isPublished
+                ? 'border-yellow-300 bg-yellow-50 text-yellow-700 hover:bg-yellow-100'
+                : 'border-green-300 bg-green-50 text-green-700 hover:bg-green-100'
+            )}
+          >
+            {course.isPublished ? (
+              <><EyeOff className="h-4 w-4" /> Unpublish</>
+            ) : (
+              <><Globe className="h-4 w-4" /> Publish course</>
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-5 gap-6">
