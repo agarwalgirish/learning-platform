@@ -1,0 +1,553 @@
+// Enterprise Learning Platform — Prisma Schema
+// Supports: multi-tenant, RBAC, RAG, adaptive learning, assessments
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  // For Supabase with connection pooling, also set directUrl:
+  // directUrl  = env("DIRECT_URL")
+  extensions = [pgvector(map: "vector", schema: "public"), uuid_ossp(map: "uuid-ossp", schema: "public")]
+}
+
+// ─── Organization / Tenant ────────────────────────────────────────────────────
+
+model Organization {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String
+  slug       String   @unique
+  logoUrl    String?
+  domain     String?  @unique
+  plan       String   @default("free")    // free | pro | enterprise
+  isActive   Boolean  @default(true)
+  settings   Json     @default("{}")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  users          User[]
+  teams          Team[]
+  topics         Topic[]
+  courses        Course[]
+  learningPaths  LearningPath[]
+  documents      UploadedDocument[]
+  aiConfig       AIConfig?
+  auditLogs      AuditLog[]
+
+  @@map("organizations")
+}
+
+// ─── Users & Auth ─────────────────────────────────────────────────────────────
+
+model User {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email          String    @unique
+  name           String?
+  passwordHash   String?
+  image          String?
+  role           UserRole  @default(LEARNER)
+  isActive       Boolean   @default(true)
+  emailVerified  DateTime?
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  teamMemberships         TeamMember[]
+  enrollments             Enrollment[]
+  progress                LearnerProgress[]
+  conceptMastery          ConceptMastery[]
+  quizAttempts            QuizAttempt[]
+  assessments             Assessment[]
+  auditLogs               AuditLog[]
+  sessions                UserSession[]
+  accounts                Account[]
+  learningPathAssignments LearningPathAssignment[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  INSTRUCTOR
+  LEARNER
+}
+
+// NextAuth required tables
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @db.Uuid
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String   @db.Uuid
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─── Teams / Departments ──────────────────────────────────────────────────────
+
+model Team {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String
+  description    String?
+  organizationId String   @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  members                 TeamMember[]
+  learningPathAssignments LearningPathAssignment[]
+
+  @@unique([organizationId, name])
+  @@map("teams")
+}
+
+model TeamMember {
+  id       String   @id @default(cuid())
+  teamId   String   @db.Uuid
+  userId   String   @db.Uuid
+  role     String   @default("member")
+  joinedAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@map("team_members")
+}
+
+// ─── Knowledge Base / Documents ───────────────────────────────────────────────
+
+model UploadedDocument {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fileName        String
+  originalName    String
+  mimeType        String
+  fileSize        Int
+  storagePath     String
+  storageProvider String         @default("local")
+  status          DocumentStatus @default(PENDING)
+  processingError String?
+  extractedText   String?        @db.Text
+  pageCount       Int?
+  metadata        Json           @default("{}")
+  uploadedById    String         @db.Uuid
+  organizationId  String         @db.Uuid
+  topicId         String?        @db.Uuid
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  topic        Topic?       @relation(fields: [topicId], references: [id])
+  chunks       DocumentChunk[]
+
+  @@index([organizationId, status])
+  @@index([topicId])
+  @@map("uploaded_documents")
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model DocumentChunk {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String   @db.Uuid
+  content    String   @db.Text
+  chunkIndex Int
+  pageNumber Int?
+  heading    String?
+  tokenCount Int?
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  // pgvector 1536-dim embedding (OpenAI text-embedding-3-small compatible)
+  embeddingVector Unsupported("vector(1536)")?
+
+  document UploadedDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@map("document_chunks")
+}
+
+// ─── Curriculum ───────────────────────────────────────────────────────────────
+
+model Topic {
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String
+  slug           String
+  description    String?    @db.Text
+  category       String?
+  difficulty     Difficulty @default(BEGINNER)
+  estimatedHours Float?
+  thumbnailUrl   String?
+  isPublished    Boolean    @default(false)
+  order          Int        @default(0)
+  organizationId String     @db.Uuid
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  documents      UploadedDocument[]
+  courses        Course[]
+  enrollments    Enrollment[]
+  progress       LearnerProgress[]
+  assessments    Assessment[]
+  conceptMastery ConceptMastery[]
+  questions      Question[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, isPublished])
+  @@map("topics")
+}
+
+enum Difficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+model Course {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String
+  description    String?  @db.Text
+  topicId        String   @db.Uuid
+  organizationId String   @db.Uuid
+  isPublished    Boolean  @default(false)
+  order          Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  topic         Topic              @relation(fields: [topicId], references: [id])
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  modules       CourseModule[]
+  pathSteps     LearningPathStep[]
+
+  @@map("courses")
+}
+
+model CourseModule {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId    String   @db.Uuid
+  title       String
+  description String?  @db.Text
+  order       Int      @default(0)
+  content     String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@map("course_modules")
+}
+
+model LearningPath {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String
+  description    String?  @db.Text
+  organizationId String   @db.Uuid
+  isPublished    Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  steps        LearningPathStep[]
+  assignments  LearningPathAssignment[]
+
+  @@map("learning_paths")
+}
+
+model LearningPathStep {
+  id             String   @id @default(cuid())
+  learningPathId String   @db.Uuid
+  courseId       String   @db.Uuid
+  order          Int
+  isRequired     Boolean  @default(true)
+
+  learningPath LearningPath @relation(fields: [learningPathId], references: [id], onDelete: Cascade)
+  course       Course       @relation(fields: [courseId], references: [id])
+
+  @@unique([learningPathId, order])
+  @@map("learning_path_steps")
+}
+
+model LearningPathAssignment {
+  id             String    @id @default(cuid())
+  learningPathId String    @db.Uuid
+  userId         String?   @db.Uuid
+  teamId         String?   @db.Uuid
+  assignedById   String    @db.Uuid
+  dueDate        DateTime?
+  createdAt      DateTime  @default(now())
+
+  learningPath LearningPath @relation(fields: [learningPathId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
+  team         Team?        @relation(fields: [teamId], references: [id])
+
+  @@map("learning_path_assignments")
+}
+
+// ─── Enrollment & Progress ────────────────────────────────────────────────────
+
+model Enrollment {
+  id          String           @id @default(cuid())
+  userId      String           @db.Uuid
+  topicId     String           @db.Uuid
+  status      EnrollmentStatus @default(IN_PROGRESS)
+  startedAt   DateTime         @default(now())
+  completedAt DateTime?
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, topicId])
+  @@map("enrollments")
+}
+
+enum EnrollmentStatus {
+  IN_PROGRESS
+  COMPLETED
+  PAUSED
+  DROPPED
+}
+
+model LearnerProgress {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String           @db.Uuid
+  topicId          String           @db.Uuid
+  proficiencyLevel ProficiencyLevel @default(BEGINNER)
+  proficiencyScore Float            @default(0)
+  isProficient     Boolean          @default(false)
+  timeSpentMinutes Int              @default(0)
+  lessonsCompleted Int              @default(0)
+  quizzesTaken     Int              @default(0)
+  avgQuizScore     Float?
+  lastActivityAt   DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, topicId])
+  @@index([userId])
+  @@map("learner_progress")
+}
+
+enum ProficiencyLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  PROFICIENT
+}
+
+model ConceptMastery {
+  id         String    @id @default(cuid())
+  userId     String    @db.Uuid
+  topicId    String    @db.Uuid
+  concept    String
+  score      Float     @default(0)
+  attempts   Int       @default(0)
+  masteredAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, topicId, concept])
+  @@map("concept_mastery")
+}
+
+// ─── Assessments & Quizzes ────────────────────────────────────────────────────
+
+model Assessment {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String           @db.Uuid
+  topicId     String           @db.Uuid
+  type        AssessmentType   @default(DIAGNOSTIC)
+  status      String           @default("pending")
+  score       Float?
+  maxScore    Float?
+  feedback    String?          @db.Text
+  level       ProficiencyLevel?
+  startedAt   DateTime         @default(now())
+  completedAt DateTime?
+  metadata    Json             @default("{}")
+
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic     Topic         @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  questions Question[]
+  attempts  QuizAttempt[]
+
+  @@index([userId, topicId])
+  @@map("assessments")
+}
+
+enum AssessmentType {
+  DIAGNOSTIC
+  FORMATIVE
+  SUMMATIVE
+  PRACTICE
+}
+
+model Question {
+  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  topicId      String       @db.Uuid
+  assessmentId String?      @db.Uuid
+  text         String       @db.Text
+  type         QuestionType @default(MULTIPLE_CHOICE)
+  difficulty   Difficulty   @default(BEGINNER)
+  explanation  String?      @db.Text
+  concept      String?
+  points       Int          @default(1)
+  metadata     Json         @default("{}")
+  createdAt    DateTime     @default(now())
+
+  topic      Topic          @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  assessment Assessment?    @relation(fields: [assessmentId], references: [id])
+  options    AnswerOption[]
+  responses  QuizResponse[]
+
+  @@index([topicId])
+  @@map("questions")
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+  SHORT_ANSWER
+  ESSAY
+  FILL_IN_THE_BLANK
+}
+
+model AnswerOption {
+  id          String  @id @default(cuid())
+  questionId  String  @db.Uuid
+  text        String
+  isCorrect   Boolean @default(false)
+  explanation String?
+  order       Int     @default(0)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("answer_options")
+}
+
+model QuizAttempt {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @db.Uuid
+  assessmentId String    @db.Uuid
+  score        Float?
+  maxScore     Float?
+  passed       Boolean?
+  timeSpentSec Int?
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assessment Assessment    @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  responses  QuizResponse[]
+
+  @@index([userId])
+  @@map("quiz_attempts")
+}
+
+model QuizResponse {
+  id           String   @id @default(cuid())
+  attemptId    String   @db.Uuid
+  questionId   String   @db.Uuid
+  answer       String   @db.Text
+  isCorrect    Boolean?
+  score        Float?
+  feedback     String?
+  timeSpentSec Int?
+  createdAt    DateTime @default(now())
+
+  attempt  QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question Question    @relation(fields: [questionId], references: [id])
+
+  @@map("quiz_responses")
+}
+
+// ─── AI Config ────────────────────────────────────────────────────────────────
+
+model AIConfig {
+  id             String   @id @default(cuid())
+  organizationId String   @unique @db.Uuid
+  provider       String   @default("openai")
+  model          String   @default("gpt-4o")
+  embeddingModel String   @default("text-embedding-3-small")
+  temperature    Float    @default(0.7)
+  maxTokens      Int      @default(2000)
+  systemPrompt   String?  @db.Text
+  useOnlyKB      Boolean  @default(true)
+  settings       Json     @default("{}")
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("ai_configs")
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String   @db.Uuid
+  userId         String?  @db.Uuid
+  action         String   // e.g. user.login, document.upload, assessment.complete
+  resource       String   // e.g. User, Document, Assessment
+  resourceId     String?
+  details        Json     @default("{}")
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([userId])
+  @@map("audit_logs")
+}
