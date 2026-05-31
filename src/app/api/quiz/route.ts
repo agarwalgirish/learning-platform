@@ -15,33 +15,40 @@ export async function POST(request: NextRequest) {
   if (action === 'start') {
     if (!topicId) return NextResponse.json({ error: 'topicId required' }, { status: 400 })
 
-    const progress = await db.learnerProgress.findUnique({
-      where: { userId_topicId: { userId: user.id, topicId } },
-    })
+    try {
+      const progress = await db.learnerProgress.findUnique({
+        where: { userId_topicId: { userId: user.id, topicId } },
+      })
+      const currentLevel = (progress?.proficiencyLevel ?? 'BEGINNER') as ProficiencyLevel
+      const weakConcepts = await getWeakConcepts(user.id, topicId)
 
-    const currentLevel = (progress?.proficiencyLevel ?? 'BEGINNER') as ProficiencyLevel
+      console.log(`[quiz] start — user=${user.id} topic=${topicId} level=${currentLevel}`)
 
-    // Find weak concepts from recent quiz responses
-    const weakConcepts = await getWeakConcepts(user.id, topicId)
-
-    const quiz = await createQuiz(
-      user.id,
-      topicId,
-      user.organizationId,
-      currentLevel,
-      weakConcepts
-    )
-
-    return NextResponse.json(quiz)
+      const quiz = await createQuiz(user.id, topicId, user.organizationId, currentLevel, weakConcepts)
+      return NextResponse.json(quiz)
+    } catch (err) {
+      console.error('[quiz] start failed:', err)
+      return NextResponse.json(
+        { error: 'Failed to generate quiz', detail: String(err) },
+        { status: 500 }
+      )
+    }
   }
 
   if (action === 'submit') {
     if (!assessmentId || !answers) {
       return NextResponse.json({ error: 'assessmentId and answers required' }, { status: 400 })
     }
-
-    const result = await scoreQuiz(assessmentId, user.id, answers)
-    return NextResponse.json(result)
+    try {
+      const result = await scoreQuiz(assessmentId, user.id, answers)
+      return NextResponse.json(result)
+    } catch (err) {
+      console.error('[quiz] submit failed:', err)
+      return NextResponse.json(
+        { error: 'Failed to score quiz', detail: String(err) },
+        { status: 500 }
+      )
+    }
   }
 
   return NextResponse.json({ error: 'Invalid action' }, { status: 400 })

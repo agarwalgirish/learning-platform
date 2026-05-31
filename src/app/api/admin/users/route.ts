@@ -33,30 +33,35 @@ export async function GET(request: NextRequest) {
     ...(role ? { role: role as any } : {}),
   }
 
-  const [users, total] = await Promise.all([
-    db.user.findMany({
-      where,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        isActive: true,
-        lastLoginAt: true,
-        createdAt: true,
-        aiOverride: true,
-        _count: {
-          select: { enrollments: true },
+  try {
+    const [users, total] = await Promise.all([
+      db.user.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          isActive: true,
+          lastLoginAt: true,
+          createdAt: true,
+          aiOverride: true,
+          _count: {
+            select: { enrollments: true },
+          },
         },
-      },
-      skip: (page - 1) * limit,
-      take: limit,
-      orderBy: { createdAt: 'desc' },
-    }),
-    db.user.count({ where }),
-  ])
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      db.user.count({ where }),
+    ])
 
-  return NextResponse.json({ users, total, page, limit })
+    return NextResponse.json({ users, total, page, limit })
+  } catch (err) {
+    console.error('GET /api/admin/users error:', err)
+    return NextResponse.json({ error: 'Failed to load users', users: [], total: 0 }, { status: 500 })
+  }
 }
 
 export async function PATCH(request: NextRequest) {

@@ -184,7 +184,7 @@ export default function UsersPage() {
     if (search) params.set('search', search)
     if (role) params.set('role', role)
     const res = await fetch(`/api/admin/users?${params}`)
-    const data = await res.json()
+    const data = res.ok ? await res.json() : { users: [], total: 0 }
     setUsers(data.users ?? [])
     setTotal(data.total ?? 0)
     setLoading(false)

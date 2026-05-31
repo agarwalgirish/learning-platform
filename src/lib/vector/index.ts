@@ -12,6 +12,12 @@ export async function embedBatch(texts: string[]): Promise<number[][]> {
   return provider.embedBatch(texts)
 }
 
+/**
+ * Cosine-similarity search over document_chunks using pgvector.
+ *
+ * Column names are quoted ("documentId" etc.) because Prisma creates camelCase
+ * columns in PostgreSQL without @map annotations.
+ */
 export async function searchSimilarChunks(
   query: string,
   options: {
@@ -30,49 +36,54 @@ export async function searchSimilarChunks(
   type RawRow = {
     id: string
     content: string
-    document_id: string
-    chunk_index: number
-    page_number: number | null
+    documentId: string
+    chunkIndex: number
+    pageNumber: number | null
     heading: string | null
-    original_name: string
+    originalName: string
     similarity: number
   }
 
   const topicFilter = options.topicId
-    ? `AND ud.topic_id = '${options.topicId}'::uuid`
+    ? `AND ud."topicId" = '${options.topicId}'::uuid`
     : ''
 
-  const results = await db.$queryRawUnsafe<RawRow[]>(`
-    SELECT
-      dc.id,
-      dc.content,
-      dc.document_id,
-      dc.chunk_index,
-      dc.page_number,
-      dc.heading,
-      ud.original_name,
-      1 - (dc.embedding_vector <=> '${vectorStr}'::vector) AS similarity
-    FROM document_chunks dc
-    JOIN uploaded_documents ud ON dc.document_id = ud.id
-    WHERE ud.organization_id = '${options.organizationId}'::uuid
-      AND ud.status = 'READY'
-      ${topicFilter}
-      AND dc.embedding_vector IS NOT NULL
-      AND 1 - (dc.embedding_vector <=> '${vectorStr}'::vector) > ${threshold}
-    ORDER BY similarity DESC
-    LIMIT ${limit}
-  `)
+  try {
+    const results = await db.$queryRawUnsafe<RawRow[]>(`
+      SELECT
+        dc.id,
+        dc.content,
+        dc."documentId",
+        dc."chunkIndex",
+        dc."pageNumber",
+        dc.heading,
+        ud."originalName",
+        1 - (dc."embeddingVector" <=> '${vectorStr}'::vector) AS similarity
+      FROM document_chunks dc
+      JOIN uploaded_documents ud ON dc."documentId" = ud.id
+      WHERE ud."organizationId" = '${options.organizationId}'::uuid
+        AND ud.status = 'READY'
+        ${topicFilter}
+        AND dc."embeddingVector" IS NOT NULL
+        AND 1 - (dc."embeddingVector" <=> '${vectorStr}'::vector) > ${threshold}
+      ORDER BY similarity DESC
+      LIMIT ${limit}
+    `)
 
-  return results.map((r) => ({
-    id: r.id,
-    content: r.content,
-    documentId: r.document_id,
-    documentName: r.original_name,
-    chunkIndex: r.chunk_index,
-    pageNumber: r.page_number,
-    heading: r.heading,
-    score: Number(r.similarity),
-  }))
+    return results.map((r) => ({
+      id: r.id,
+      content: r.content,
+      documentId: r.documentId,
+      documentName: r.originalName,
+      chunkIndex: r.chunkIndex,
+      pageNumber: r.pageNumber,
+      heading: r.heading,
+      score: Number(r.similarity),
+    }))
+  } catch (err) {
+    console.error('[vector] searchSimilarChunks failed:', err)
+    return []
+  }
 }
 
 export async function storeChunkEmbedding(
@@ -81,6 +92,6 @@ export async function storeChunkEmbedding(
 ): Promise<void> {
   const vectorStr = `[${embedding.join(',')}]`
   await db.$executeRawUnsafe(
-    `UPDATE document_chunks SET embedding_vector = '${vectorStr}'::vector WHERE id = '${chunkId}'::uuid`
+    `UPDATE document_chunks SET "embeddingVector" = '${vectorStr}'::vector WHERE id = '${chunkId}'::uuid`
   )
 }
