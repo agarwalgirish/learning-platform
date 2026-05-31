@@ -22,11 +22,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'topicId and message required' }, { status: 400 })
   }
 
-  // Get learner's current proficiency level
-  const progress = await db.learnerProgress.findUnique({
-    where: { userId_topicId: { userId: user.id, topicId } },
-  })
+  // Fetch topic name and learner's current proficiency level in parallel
+  const [topic, progress] = await Promise.all([
+    db.topic.findUnique({ where: { id: topicId }, select: { name: true } }),
+    db.learnerProgress.findUnique({ where: { userId_topicId: { userId: user.id, topicId } } }),
+  ])
 
+  const topicName = topic?.name ?? 'the topic'
   const proficiencyLevel = progress?.proficiencyLevel ?? 'BEGINNER'
 
   // Ensure enrollment exists
@@ -43,6 +45,7 @@ export async function POST(request: NextRequest) {
 
   const response = await generateTutorResponse(messages, {
     topicId,
+    topicName,
     organizationId: user.organizationId,
     userId: user.id,
     proficiencyLevel,

@@ -48,10 +48,12 @@ export default function LearnPage() {
       })
       const data = await res.json()
 
+      if (data.topicName) setTopicName(data.topicName)
+
       if (data.alreadyAssessed) {
         setProficiencyLevel(data.level)
         setPhase('learning')
-        await generateIntroduction(data.level)
+        await generateIntroduction(data.level, data.topicName ?? '')
       } else {
         setAssessment({
           assessmentId: data.assessmentId,
@@ -69,14 +71,17 @@ export default function LearnPage() {
     }
   }
 
-  async function generateIntroduction(level: string) {
+  async function generateIntroduction(level: string, name?: string) {
     setLoading(true)
+    const topic = name || topicName || 'this topic'
     try {
       const introPrompt =
-        `Please introduce this topic to me as a ${level} level learner. ` +
-        `Give me a structured overview: what this topic is about, why it matters, ` +
-        `and the key concepts I'll learn today. Then begin teaching me the first ` +
-        `and most fundamental concept with a clear explanation and a practical example.`
+        `You are teaching me "${topic}". I am a ${level} level learner. ` +
+        `Please introduce "${topic}" to me with: ` +
+        `(1) what "${topic}" is and why it matters, ` +
+        `(2) a numbered list of the key concepts I will learn, ` +
+        `(3) a clear explanation of the first and most fundamental concept with a practical example. ` +
+        `Base your introduction on the knowledge base documents for this topic.`
 
       const res = await fetch('/api/learn', {
         method: 'POST',
@@ -95,11 +100,10 @@ export default function LearnPage() {
       ])
       if (data.sources?.length) setSources(data.sources)
     } catch {
-      // Fallback to static message if AI call fails
       setMessages([
         {
           role: 'assistant',
-          content: `Welcome! I'm your AI tutor for this topic. You're at the **${level}** level. Ask me anything to get started.`,
+          content: `Welcome! I'm your AI tutor for **${topic}**. You're at the **${level}** level. Ask me anything to get started.`,
           timestamp: new Date().toISOString(),
         },
       ])

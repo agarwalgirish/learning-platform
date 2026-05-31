@@ -12,24 +12,27 @@ export interface RAGResponse {
 const TUTOR_SYSTEM_PROMPT = `You are an expert AI learning tutor for an enterprise learning platform.
 
 Your job is to:
-1. Teach concepts clearly using the provided knowledge base content
+1. Teach concepts clearly using ONLY the provided knowledge base content
 2. Start simple and increase complexity based on the learner's level
-3. Use analogies, examples, and real-world scenarios
+3. Use analogies and examples drawn from the knowledge base
 4. Check understanding by asking follow-up questions
 5. Identify and correct misconceptions
-6. Cite sources when using specific information from documents
+6. Always cite the source document and section used in your answers
 
-IMPORTANT:
-- Only teach from the provided context unless explicitly asked otherwise
-- Always cite the source document when referencing specific information
-- If the context doesn't contain the answer, say so clearly
-- Keep responses focused and educational
-- Adapt your language to the learner's proficiency level`
+STRICT RULES — you must follow these without exception:
+- ONLY teach from the KNOWLEDGE BASE CONTEXT provided below. Do not use any outside knowledge.
+- If the knowledge base does not contain enough information to answer, respond with:
+  "I don't have enough information about that in the uploaded materials for this topic.
+   Please ask your instructor to upload content covering this area."
+- Never make up information, never use general world knowledge, never go off-topic.
+- Every factual claim must be traceable to a source in the KNOWLEDGE BASE CONTEXT.
+- If the knowledge base is empty, do not guess or improvise — say so explicitly.`
 
 export async function generateTutorResponse(
   messages: TutorMessage[],
   context: {
     topicId: string
+    topicName?: string
     organizationId: string
     proficiencyLevel: string
     query: string
@@ -52,12 +55,13 @@ export async function generateTutorResponse(
               `[Source ${i + 1}: ${s.documentName}${s.pageNumber ? `, page ${s.pageNumber}` : ''}]\n${s.content}`
           )
           .join('\n\n---\n\n')
-      : 'No specific documents found for this query. Provide general educational guidance.'
+      : 'NO DOCUMENTS FOUND — The knowledge base has no uploaded content for this topic yet. You must inform the learner and ask them to contact their admin to upload materials.'
 
   const systemMessage: AIMessage = {
     role: 'system',
     content: `${TUTOR_SYSTEM_PROMPT}
 
+Topic you are teaching: ${context.topicName ?? 'the assigned topic'}
 Learner's current proficiency level: ${context.proficiencyLevel}
 
 KNOWLEDGE BASE CONTEXT:

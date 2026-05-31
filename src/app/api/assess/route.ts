@@ -15,6 +15,13 @@ export async function POST(request: NextRequest) {
     if (!topicId) return NextResponse.json({ error: 'topicId required' }, { status: 400 })
 
     try {
+      // Always fetch topic name so the client can display it and pass it to the AI
+      const topic = await db.topic.findUnique({
+        where: { id: topicId },
+        select: { name: true },
+      })
+      const topicName = topic?.name ?? 'this topic'
+
       const recent = await db.assessment.findFirst({
         where: { userId: user.id, topicId, type: 'DIAGNOSTIC', status: 'completed' },
         orderBy: { completedAt: 'desc' },
@@ -26,16 +33,17 @@ export async function POST(request: NextRequest) {
           level: recent.level,
           score: recent.score,
           assessmentId: recent.id,
+          topicName,
         })
       }
 
-      console.log(`[assess] start diagnostic — user=${user.id} topic=${topicId}`)
+      console.log(`[assess] start diagnostic — user=${user.id} topic=${topicId} (${topicName})`)
       const { assessmentId: newId, questions } = await createDiagnosticAssessment(
         user.id,
         topicId,
         user.organizationId
       )
-      return NextResponse.json({ assessmentId: newId, questions })
+      return NextResponse.json({ assessmentId: newId, questions, topicName })
     } catch (err) {
       console.error('[assess] start failed:', err)
       return NextResponse.json(
