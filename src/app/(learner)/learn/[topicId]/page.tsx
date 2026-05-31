@@ -207,23 +207,49 @@ export default function LearnPage() {
     }
   }
 
+  // Words that signal the learner is ready to move on rather than asking a question
+  const READY_WORDS = new Set([
+    'ok', 'okay', 'got it', 'gotcha', 'understood', 'sure', 'ready',
+    'yes', 'yeah', 'yep', 'yup', 'done', 'next', 'continue', 'proceed',
+    'move on', 'i understand', 'i get it', 'makes sense', 'clear',
+  ])
+
+  function isReadyAcknowledgment(msg: string): boolean {
+    return READY_WORDS.has(msg.toLowerCase().trim().replace(/[.!?]+$/, ''))
+  }
+
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault()
     if (!input.trim() || loading) return
     const msg = input.trim()
     setInput('')
+
+    // Short acknowledgments like "Ok", "Got it" mean the learner is ready —
+    // auto-start the section check instead of confusing the RAG guardrail
+    if (isReadyAcknowledgment(msg) && messages.length >= 1) {
+      setMessages((p) => [...p, { role: 'user', content: msg, timestamp: new Date().toISOString() }])
+      await startSectionCheck()
+      return
+    }
+
     setMessages((p) => [...p, { role: 'user', content: msg, timestamp: new Date().toISOString() }])
     setLoading(true)
     try {
+      // Pass section title as searchHint so follow-up questions still search the right doc
+      const searchHint = currentSection?.title
       const res = await fetch('/api/learn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topicId, message: msg, history: messages.slice(-8) }),
+        body: JSON.stringify({
+          topicId, message: msg,
+          history: messages.slice(-8),
+          ...(searchHint ? { searchHint } : {}),
+        }),
       })
       const data = await res.json()
       setMessages((p) => [...p, {
-        role: 'assistant', content: data.content,
-        sources: data.sources, timestamp: new Date().toISOString(),
+        role: 'assistant', content: data.content ?? 'No response.',
+        sources: data.sources ?? [], timestamp: new Date().toISOString(),
       }])
       if (data.sources?.length) setSources(data.sources)
     } catch {
@@ -728,13 +754,18 @@ export default function LearnPage() {
                 <FileText className="h-3 w-3" /> {sources.length} sources
               </button>
             )}
-            {messages.length > 1 && (
-              <button onClick={startSectionCheck}
-                className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-lg flex items-center gap-1.5">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Section Check
-              </button>
-            )}
+            <button onClick={startSectionCheck}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                messages.length >= 1 && !loading
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'bg-muted text-muted-foreground opacity-50 cursor-not-allowed'
+              )}
+              disabled={messages.length < 1 || loading}
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              Section Check →
+            </button>
           </div>
         </div>
 
@@ -763,6 +794,24 @@ export default function LearnPage() {
                 </div>
               </div>
             ))}
+            {/* After the first lesson message, show a prominent "Ready?" prompt */}
+            {messages.length === 1 && !loading && (
+              <div className="flex justify-center">
+                <div className="bg-primary/5 border border-primary/20 rounded-2xl px-6 py-4 text-center max-w-sm">
+                  <p className="text-sm font-medium mb-1">Lesson complete!</p>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Have questions? Ask below. When you feel ready, take the Section Check.
+                  </p>
+                  <button
+                    onClick={startSectionCheck}
+                    className="bg-primary text-primary-foreground px-5 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+                  >
+                    I&apos;m ready — Section Check →
+                  </button>
+                </div>
+              </div>
+            )}
+
             {loading && (
               <div className="flex justify-start">
                 <div className="bg-card border border-border rounded-2xl rounded-bl-sm px-4 py-3">
@@ -797,7 +846,7 @@ export default function LearnPage() {
 
         <form onSubmit={sendMessage} className="border-t border-border p-4 flex gap-3 bg-card flex-shrink-0">
           <input value={input} onChange={(e) => setInput(e.target.value)}
-            placeholder={`Ask about ${currentSection?.title ?? topicName}…`}
+            placeholder={`Ask a question, or type "ready" / "ok" to start the Section Check…`}
             className="flex-1 px-4 py-2.5 border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 bg-background" />
           <button type="submit" disabled={!input.trim() || loading}
             className="bg-primary text-primary-foreground px-4 py-2.5 rounded-xl disabled:opacity-50">
