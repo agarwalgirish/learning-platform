@@ -21,7 +21,7 @@ export async function searchSimilarChunks(
 ): Promise<DocumentChunkWithScore[]> {
   const queryEmbedding = await embedText(query)
   const limit = options.limit ?? 5
-  const threshold = options.threshold ?? 0.65
+  const threshold = options.threshold ?? 0.4
   const vectorStr = `[${queryEmbedding.join(',')}]`
 
   type Row = {

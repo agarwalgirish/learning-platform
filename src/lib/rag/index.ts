@@ -62,12 +62,18 @@ export async function generateTutorResponse(
 ): Promise<RAGResponse> {
   const topic = context.topicName || 'this topic'
 
-  // Retrieve relevant chunks from the knowledge base
-  const sources = await searchSimilarChunks(context.query, {
+  // For long instruction-style messages (intro prompts), use just the topic name
+  // as the search query — instruction text doesn't embed well against document content
+  const searchQuery = context.query.length > 200
+    ? topic
+    : context.query
+
+  // Lower threshold (0.4) to catch real content — Vaisala PDF chunks score ~0.55–0.63
+  const sources = await searchSimilarChunks(searchQuery, {
     topicId: context.topicId,
     organizationId: context.organizationId,
-    limit: 5,
-    threshold: 0.6,
+    limit: 6,
+    threshold: 0.4,
   })
 
   const hasContext = sources.length > 0
