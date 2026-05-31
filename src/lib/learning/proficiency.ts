@@ -57,7 +57,8 @@ export function evaluateProficiency(
 
   const level = calculateProficiencyLevel(compositeScore)
 
-  // Must score >= threshold on LAST two quizzes consecutively
+  // Require: (1) at least 3 quiz attempts, (2) last 2 both >= threshold
+  const hasEnoughAttempts = quizScores.length >= 3
   const last2 = quizScores.slice(-2)
   const consistentHighScore =
     last2.length >= 2 && last2.every((s) => s >= PROFICIENCY_REQUIRED_SCORE)
@@ -65,7 +66,7 @@ export function evaluateProficiency(
   return {
     level,
     score: Math.round(compositeScore),
-    isProficient: level === 'PROFICIENT' && consistentHighScore,
+    isProficient: level === 'PROFICIENT' && consistentHighScore && hasEnoughAttempts,
     progress: calculateProgressWithinLevel(compositeScore, level),
   }
 }

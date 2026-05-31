@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
 
   const user = session.user as any
   const body = await request.json()
-  const { action, topicId, assessmentId, answers } = body
+  const { action, topicId, assessmentId, answers, type } = body
 
   if (action === 'start') {
     if (!topicId) return NextResponse.json({ error: 'topicId required' }, { status: 400 })
@@ -27,7 +27,10 @@ export async function POST(request: NextRequest) {
         orderBy: { completedAt: 'desc' },
       })
 
-      if (recent) {
+      // SUMMATIVE type = final assessment, always creates new questions regardless
+      const isSummative = type === 'SUMMATIVE'
+
+      if (recent && !isSummative) {
         return NextResponse.json({
           alreadyAssessed: true,
           level: recent.level,
@@ -37,11 +40,11 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      console.log(`[assess] start — user=${user.id} topic="${topicName}"`)
+      console.log(`[assess] start ${isSummative ? 'SUMMATIVE' : 'DIAGNOSTIC'} — user=${user.id} topic="${topicName}"`)
       const { assessmentId: newId, questions } = await createDiagnosticAssessment(
         user.id, topicId, user.organizationId
       )
-      return NextResponse.json({ assessmentId: newId, questions, topicName })
+      return NextResponse.json({ assessmentId: newId, questions, topicName, isSummative })
     } catch (err) {
       console.error('[assess] start failed:', err)
       return NextResponse.json(

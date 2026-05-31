@@ -10,8 +10,6 @@ import ReactMarkdown from 'react-markdown'
 import { cn, getProficiencyColor } from '@/lib/utils'
 import type { TutorMessage, DocumentChunkWithScore } from '@/types'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 type Phase =
   | 'loading'
   | 'assessing'
@@ -22,11 +20,15 @@ type Phase =
   | 'final-assessment'
   | 'complete'
 
-interface CourseModule { id: string; title: string; content?: string; order: number }
-interface Course { id: string; name: string; modules: CourseModule[] }
-interface CheckQuestion { text: string; options: string[]; answer: string; explanation: string }
+interface Section {
+  id: string
+  title: string
+  type: 'written' | 'document'
+  content?: string       // for written modules
+  documentId?: string    // for document-based sections
+}
 
-// ─── Main Component ────────────────────────────────────────────────────────────
+interface CheckQuestion { text: string; options: string[]; id: string }
 
 export default function LearnPage() {
   const { topicId } = useParams<{ topicId: string }>()
@@ -37,10 +39,10 @@ export default function LearnPage() {
   const [proficiencyLevel, setProficiencyLevel] = useState('BEGINNER')
   const [assessmentResult, setAssessmentResult] = useState<any>(null)
 
-  // Course / module state
-  const [course, setCourse] = useState<Course | null>(null)
-  const [moduleIndex, setModuleIndex] = useState(0)
-  const [completedModules, setCompletedModules] = useState<Set<number>>(new Set())
+  // Sections (written modules OR document-based virtual sections)
+  const [sections, setSections] = useState<Section[]>([])
+  const [sectionIndex, setSectionIndex] = useState(0)
+  const [completedSections, setCompletedSections] = useState<Set<number>>(new Set())
 
   // Chat
   const [messages, setMessages] = useState<TutorMessage[]>([])
@@ -50,69 +52,87 @@ export default function LearnPage() {
   const [showSources, setShowSources] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // Assessment
+  // Diagnostic assessment
   const [assessmentQ, setAssessmentQ] = useState<any[] | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [assessmentId, setAssessmentId] = useState<string | null>(null)
 
-  // Module check questions
+  // Module check
   const [checkQuestions, setCheckQuestions] = useState<CheckQuestion[]>([])
   const [checkAnswers, setCheckAnswers] = useState<Record<number, string>>({})
   const [checkSubmitted, setCheckSubmitted] = useState(false)
   const [checkScore, setCheckScore] = useState(0)
+  const [checkAssessmentId, setCheckAssessmentId] = useState<string | null>(null)
 
   useEffect(() => { init() }, [topicId])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
 
-  // ── Initialise ──────────────────────────────────────────────────────────────
+  // ── Init ────────────────────────────────────────────────────────────────────
 
   async function init() {
     setPhase('loading')
-    setLoading(true)
 
-    // Fetch topic name + courses in parallel
-    const [assessRes, coursesRes] = await Promise.all([
+    const [assessRes, coursesRes, docsRes] = await Promise.all([
       fetch('/api/assess', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'start', topicId }),
       }),
       fetch(`/api/courses?topicId=${topicId}`),
+      fetch(`/api/admin/content?topicId=${topicId}`),
     ])
 
-    const assessData = await assessRes.json()
-    const coursesData = await coursesRes.json()
+    const [assessData, coursesData, docsData] = await Promise.all([
+      assessRes.json(), coursesRes.json(), docsRes.json(),
+    ])
 
     if (assessData.topicName) setTopicName(assessData.topicName)
 
-    // Find first published course with modules
-    const publishedCourse = (coursesData.courses ?? []).find(
+    // Build sections: prefer written course modules, fall back to uploaded documents
+    const course = (coursesData.courses ?? []).find(
       (c: any) => c.isPublished && c.modules?.length > 0
-    ) ?? (coursesData.courses ?? [])[0] ?? null
-    setCourse(publishedCourse)
+    ) ?? null
 
-    setLoading(false)
+    let builtSections: Section[] = []
+
+    if (course?.modules?.length > 0) {
+      // Written course modules
+      builtSections = course.modules.map((m: any) => ({
+        id: m.id, title: m.title, type: 'written' as const, content: m.content,
+      }))
+    } else {
+      // Auto-create sections from uploaded documents
+      const docs = (docsData.documents ?? []).filter((d: any) => d.status === 'READY')
+      builtSections = docs.map((d: any) => ({
+        id: d.id,
+        title: d.originalName.replace(/\.[^.]+$/, '').replace(/-\d+-Released copy$/, '').trim(),
+        type: 'document' as const,
+        documentId: d.id,
+      }))
+    }
+
+    setSections(builtSections)
 
     if (assessData.alreadyAssessed) {
       setProficiencyLevel(assessData.level)
-      if (publishedCourse?.modules?.length) {
+      if (builtSections.length > 0) {
         setPhase('overview')
       } else {
         setPhase('module-learning')
-        await startModuleChat(publishedCourse, 0, assessData.topicName ?? '', assessData.level)
+        await startSectionChat(builtSections, 0, assessData.topicName ?? '', assessData.level)
       }
-    } else if (assessData.error) {
-      // No diagnostic possible — go straight to learning
-      setPhase('module-learning')
-      await startModuleChat(publishedCourse, 0, assessData.topicName ?? '', 'BEGINNER')
-    } else {
+    } else if (assessData.questions) {
       setAssessmentQ(assessData.questions)
       setAssessmentId(assessData.assessmentId)
       setPhase('assessing')
+    } else {
+      // No documents and no diagnostic possible
+      setPhase('module-learning')
+      await startSectionChat(builtSections, 0, assessData.topicName ?? '', 'BEGINNER')
     }
   }
 
-  // ── Diagnostic assessment ───────────────────────────────────────────────────
+  // ── Diagnostic ──────────────────────────────────────────────────────────────
 
   async function submitAssessment() {
     if (!assessmentId) return
@@ -121,8 +141,7 @@ export default function LearnPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        action: 'submit',
-        assessmentId,
+        action: 'submit', assessmentId,
         answers: Object.entries(answers).map(([questionId, answer]) => ({ questionId, answer })),
       }),
     })
@@ -133,33 +152,30 @@ export default function LearnPage() {
     setPhase('assessment-result')
   }
 
-  // ── Module learning ─────────────────────────────────────────────────────────
+  // ── Section teaching ─────────────────────────────────────────────────────
 
-  async function startModuleChat(
-    activeCourse: Course | null,
-    idx: number,
-    tName: string,
-    level: string
+  async function startSectionChat(
+    secs: Section[], idx: number, tName: string, level: string
   ) {
     setMessages([])
     setSources([])
     setLoading(true)
 
-    const currentModule = activeCourse?.modules?.[idx]
-    const totalModules = activeCourse?.modules?.length ?? 0
+    const sec = secs[idx]
+    const total = secs.length
+    const topic = tName || topicName
 
-    const prompt = currentModule
-      ? `You are teaching module ${idx + 1} of ${totalModules}: "${currentModule.title}" ` +
-        `in the course "${activeCourse?.name}" for topic "${tName || topicName}". ` +
-        `The learner is at ${level} level.\n\n` +
-        (currentModule.content
-          ? `Module content:\n${currentModule.content}\n\n`
-          : '') +
-        `Teach this module step by step. Start with a brief overview of what this module covers, ` +
-        `then explain the core concepts clearly with examples. ` +
-        `End by asking the learner if they have questions before moving to the check.`
-      : `Introduce the topic "${tName || topicName}" to a ${level} level learner. ` +
-        `Give a structured overview and start teaching the first key concept using only the knowledge base.`
+    const prompt = sec
+      ? sec.type === 'written' && sec.content
+        ? `You are teaching section ${idx + 1} of ${total}: "${sec.title}" for the topic "${topic}". ` +
+          `Learner level: ${level}.\n\nSection content:\n${sec.content}\n\n` +
+          `Teach this section step by step with clear explanations and examples.`
+        : `You are teaching section ${idx + 1} of ${total}: "${sec.title}" for the topic "${topic}". ` +
+          `Learner level: ${level}. ` +
+          `Focus specifically on the content from the document titled "${sec.title}". ` +
+          `Give a thorough introduction covering all the key concepts, rules, procedures, and examples in this document. ` +
+          `Be comprehensive — the learner needs to understand everything in this document.`
+      : `Introduce the topic "${topic}" to a ${level} level learner comprehensively.`
 
     try {
       const res = await fetch('/api/learn', {
@@ -169,16 +185,14 @@ export default function LearnPage() {
       })
       const data = await res.json()
       setMessages([{
-        role: 'assistant',
-        content: data.content,
-        sources: data.sources,
-        timestamp: new Date().toISOString(),
+        role: 'assistant', content: data.content,
+        sources: data.sources, timestamp: new Date().toISOString(),
       }])
       if (data.sources?.length) setSources(data.sources)
     } catch {
       setMessages([{
         role: 'assistant',
-        content: `Let's start learning **${currentModule?.title ?? tName}**. Ask me anything about this module.`,
+        content: `Let's study **${sec?.title ?? topic}**. Ask me anything about this section.`,
         timestamp: new Date().toISOString(),
       }])
     } finally {
@@ -191,9 +205,8 @@ export default function LearnPage() {
     if (!input.trim() || loading) return
     const msg = input.trim()
     setInput('')
-    setMessages((prev) => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }])
+    setMessages((p) => [...p, { role: 'user', content: msg, timestamp: new Date().toISOString() }])
     setLoading(true)
-
     try {
       const res = await fetch('/api/learn', {
         method: 'POST',
@@ -201,13 +214,13 @@ export default function LearnPage() {
         body: JSON.stringify({ topicId, message: msg, history: messages.slice(-8) }),
       })
       const data = await res.json()
-      setMessages((prev) => [...prev, {
+      setMessages((p) => [...p, {
         role: 'assistant', content: data.content,
         sources: data.sources, timestamp: new Date().toISOString(),
       }])
       if (data.sources?.length) setSources(data.sources)
     } catch {
-      setMessages((prev) => [...prev, {
+      setMessages((p) => [...p, {
         role: 'assistant',
         content: 'Sorry, I encountered an error. Please try again.',
         timestamp: new Date().toISOString(),
@@ -217,13 +230,12 @@ export default function LearnPage() {
     }
   }
 
-  // ── Module check ────────────────────────────────────────────────────────────
+  // ── Section check ────────────────────────────────────────────────────────
 
-  async function startModuleCheck() {
+  async function startSectionCheck() {
     setLoading(true)
     setCheckAnswers({})
     setCheckSubmitted(false)
-
     try {
       const res = await fetch('/api/quiz', {
         method: 'POST',
@@ -231,17 +243,10 @@ export default function LearnPage() {
         body: JSON.stringify({ action: 'start', topicId }),
       })
       const data = await res.json()
-      // Use up to 3 questions as a module check
-      const qs = (data.questions ?? []).slice(0, 3).map((q: any) => ({
-        text: q.text,
-        options: q.options?.map((o: any) => o.text) ?? [],
-        answer: '',
-        explanation: '',
-        id: q.id,
-        assessmentId: data.assessmentId,
-      }))
-      setCheckQuestions(qs)
-      setAssessmentId(data.assessmentId)
+      setCheckQuestions((data.questions ?? []).slice(0, 5).map((q: any) => ({
+        text: q.text, options: q.options?.map((o: any) => o.text) ?? [], id: q.id,
+      })))
+      setCheckAssessmentId(data.assessmentId)
     } catch {
       setCheckQuestions([])
     } finally {
@@ -250,60 +255,61 @@ export default function LearnPage() {
     }
   }
 
-  async function submitModuleCheck() {
-    const correct = checkQuestions.filter((_, i) => {
-      const userAnswer = checkAnswers[i]
-      // We'll score server-side via quiz submit
-      return !!userAnswer
-    }).length
-
+  async function submitSectionCheck() {
     setLoading(true)
-    if (assessmentId) {
-      const answers2 = checkQuestions.map((q: any, i) => ({
-        questionId: q.id,
-        answer: checkAnswers[i] ?? '',
-      }))
+    if (checkAssessmentId) {
       try {
         await fetch('/api/quiz', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'submit', assessmentId, answers: answers2 }),
+          body: JSON.stringify({
+            action: 'submit', assessmentId: checkAssessmentId,
+            answers: checkQuestions.map((q, i) => ({ questionId: q.id, answer: checkAnswers[i] ?? '' })),
+          }),
         })
       } catch {}
     }
-    setLoading(false)
-    setCheckSubmitted(true)
     const score = Math.round((Object.keys(checkAnswers).length / Math.max(checkQuestions.length, 1)) * 100)
     setCheckScore(score)
+    setLoading(false)
+    setCheckSubmitted(true)
   }
 
-  function completeModule() {
-    const newCompleted = new Set(completedModules)
-    newCompleted.add(moduleIndex)
-    setCompletedModules(newCompleted)
+  function proceedToNextSection() {
+    const newCompleted = new Set(completedSections)
+    newCompleted.add(sectionIndex)
+    setCompletedSections(newCompleted)
 
-    const modules = course?.modules ?? []
-    if (moduleIndex < modules.length - 1) {
-      const nextIdx = moduleIndex + 1
-      setModuleIndex(nextIdx)
+    if (sectionIndex < sections.length - 1) {
+      const next = sectionIndex + 1
+      setSectionIndex(next)
       setPhase('module-learning')
-      startModuleChat(course, nextIdx, topicName, proficiencyLevel)
+      startSectionChat(sections, next, topicName, proficiencyLevel)
     } else {
-      // All modules done → final assessment
+      // All sections done → summative final assessment
       setPhase('final-assessment')
       setAnswers({})
       setAssessmentId(null)
-      // Load final assessment questions
-      fetch('/api/assess', {
+      setAssessmentQ(null)
+      loadFinalAssessment()
+    }
+  }
+
+  async function loadFinalAssessment() {
+    try {
+      const res = await fetch('/api/assess', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'start', topicId }),
-      }).then((r) => r.json()).then((data) => {
-        if (data.assessmentId) {
-          setAssessmentQ(data.questions)
-          setAssessmentId(data.assessmentId)
-        }
+        // type: SUMMATIVE bypasses "already assessed" check
+        body: JSON.stringify({ action: 'start', topicId, type: 'SUMMATIVE' }),
       })
+      const data = await res.json()
+      if (data.questions) {
+        setAssessmentQ(data.questions)
+        setAssessmentId(data.assessmentId)
+      }
+    } catch (err) {
+      console.error('[final-assessment] load failed:', err)
     }
   }
 
@@ -314,8 +320,7 @@ export default function LearnPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        action: 'submit',
-        assessmentId,
+        action: 'submit', assessmentId,
         answers: Object.entries(answers).map(([questionId, answer]) => ({ questionId, answer })),
       }),
     })
@@ -326,13 +331,11 @@ export default function LearnPage() {
     setPhase('complete')
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ─── RENDER ──────────────────────────────────────────────────────────────────
 
-  const modules = course?.modules ?? []
+  const currentSection = sections[sectionIndex]
 
-  // ── Loading ──────────────────────────────────────────────────────────────────
+  // Loading
   if (phase === 'loading') {
     return (
       <div className="flex items-center justify-center h-64">
@@ -341,7 +344,7 @@ export default function LearnPage() {
     )
   }
 
-  // ── Diagnostic Assessment ────────────────────────────────────────────────────
+  // Diagnostic
   if (phase === 'assessing' && assessmentQ) {
     const answered = Object.keys(answers).length
     const progress = Math.round((answered / assessmentQ.length) * 100)
@@ -350,7 +353,7 @@ export default function LearnPage() {
         <div className="mb-6">
           <h1 className="text-2xl font-bold">Diagnostic Assessment</h1>
           <p className="text-muted-foreground mt-1">
-            Let's assess your current level of <strong>{topicName}</strong>
+            Let&apos;s assess your current level of <strong>{topicName}</strong>
           </p>
           <div className="mt-3 flex items-center gap-3">
             <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
@@ -370,7 +373,7 @@ export default function LearnPage() {
                     answers[q.id] === opt.text ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent'
                   )}>
                     <input type="radio" name={q.id} value={opt.text} checked={answers[q.id] === opt.text}
-                      onChange={() => setAnswers((p) => ({ ...p, [q.id]: opt.text }))} className="text-primary" />
+                      onChange={() => setAnswers((p) => ({ ...p, [q.id]: opt.text }))} />
                     <span className="text-sm">{opt.text}</span>
                   </label>
                 ))}
@@ -386,7 +389,7 @@ export default function LearnPage() {
     )
   }
 
-  // ── Assessment Result ─────────────────────────────────────────────────────────
+  // Assessment result
   if (phase === 'assessment-result' && assessmentResult) {
     return (
       <div className="max-w-lg mx-auto text-center">
@@ -394,27 +397,27 @@ export default function LearnPage() {
           <Award className="h-12 w-12 text-primary mx-auto mb-4" />
           <h1 className="text-2xl font-bold mb-1">Assessment Complete</h1>
           <div className="bg-primary/5 rounded-xl p-4 my-5">
-            <p className="text-sm text-muted-foreground">Your level</p>
+            <p className="text-sm text-muted-foreground">Your current level</p>
             <p className={`text-2xl font-bold mt-1 ${getProficiencyColor(assessmentResult.level).split(' ')[0]}`}>
               {assessmentResult.level}
             </p>
             <p className="text-4xl font-bold">{assessmentResult.score}%</p>
           </div>
-          {modules.length > 0 ? (
+          {sections.length > 0 ? (
             <>
               <p className="text-sm text-muted-foreground mb-5">
-                This course has <strong>{modules.length} module{modules.length !== 1 ? 's' : ''}</strong>.
-                The tutor will teach each one and check your understanding before moving on.
+                This course covers <strong>{sections.length} section{sections.length !== 1 ? 's' : ''}</strong>.
+                The tutor will teach each one, check your understanding, then give a final assessment.
               </p>
               <button onClick={() => setPhase('overview')}
                 className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium flex items-center justify-center gap-2">
-                View Course Overview <ChevronRight className="h-4 w-4" />
+                View Course Outline <ChevronRight className="h-4 w-4" />
               </button>
             </>
           ) : (
-            <button onClick={() => { setPhase('module-learning'); startModuleChat(course, 0, topicName, assessmentResult.level) }}
-              className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium flex items-center justify-center gap-2">
-              Start Learning <ChevronRight className="h-4 w-4" />
+            <button onClick={() => { setPhase('module-learning'); startSectionChat(sections, 0, topicName, assessmentResult.level) }}
+              className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium">
+              Start Learning
             </button>
           )}
         </div>
@@ -422,32 +425,29 @@ export default function LearnPage() {
     )
   }
 
-  // ── Course Overview ───────────────────────────────────────────────────────────
+  // Course Overview
   if (phase === 'overview') {
     return (
       <div className="max-w-2xl mx-auto">
         <div className="mb-6">
           <h1 className="text-2xl font-bold">{topicName}</h1>
-          {course && <p className="text-muted-foreground mt-1">{course.name}</p>}
-          <div className="mt-2 flex items-center gap-2">
+          <div className="flex items-center gap-2 mt-2">
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getProficiencyColor(proficiencyLevel)}`}>
               Your level: {proficiencyLevel}
             </span>
           </div>
         </div>
-
         <div className="bg-card border border-border rounded-xl p-5 mb-5">
           <h2 className="font-semibold mb-1">How this works</h2>
           <p className="text-sm text-muted-foreground">
-            The AI tutor will teach each module using your organisation's knowledge base,
-            then give you a short check before you move on. A final assessment at the end
-            will determine your proficiency level.
+            The AI tutor will teach each section from your uploaded documents.
+            After each section you&apos;ll answer a short check. Only after completing
+            all {sections.length} sections will the final assessment unlock.
           </p>
         </div>
-
-        <div className="space-y-3 mb-6">
-          {modules.map((mod, i) => (
-            <div key={mod.id} className={cn(
+        <div className="space-y-2 mb-6">
+          {sections.map((sec, i) => (
+            <div key={sec.id} className={cn(
               'flex items-center gap-4 p-4 rounded-xl border',
               i === 0 ? 'border-primary bg-primary/5' : 'border-border bg-card'
             )}>
@@ -458,59 +458,58 @@ export default function LearnPage() {
                 {i + 1}
               </div>
               <div className="flex-1">
-                <p className="font-medium text-sm">{mod.title}</p>
+                <p className="font-medium text-sm">{sec.title}</p>
+                {sec.type === 'document' && (
+                  <p className="text-xs text-muted-foreground mt-0.5">Uploaded document</p>
+                )}
               </div>
-              {i === 0
-                ? <PlayCircle className="h-5 w-5 text-primary flex-shrink-0" />
-                : <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-              }
+              {i === 0 ? <PlayCircle className="h-5 w-5 text-primary flex-shrink-0" /> : <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />}
             </div>
           ))}
           <div className="flex items-center gap-4 p-4 rounded-xl border border-dashed border-border">
             <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-muted">
               <Trophy className="h-4 w-4 text-muted-foreground" />
             </div>
-            <p className="font-medium text-sm text-muted-foreground">Final Assessment</p>
+            <p className="font-medium text-sm text-muted-foreground">
+              Final Assessment — unlocks after all {sections.length} sections
+            </p>
             <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0 ml-auto" />
           </div>
         </div>
-
         <button
           onClick={() => {
-            setModuleIndex(0)
+            setSectionIndex(0)
             setPhase('module-learning')
-            startModuleChat(course, 0, topicName, proficiencyLevel)
+            startSectionChat(sections, 0, topicName, proficiencyLevel)
           }}
           className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium flex items-center justify-center gap-2"
         >
-          <PlayCircle className="h-5 w-5" /> Start Module 1: {modules[0]?.title}
+          <PlayCircle className="h-5 w-5" /> Start: {sections[0]?.title}
         </button>
       </div>
     )
   }
 
-  // ── Module Check ──────────────────────────────────────────────────────────────
+  // Section Check
   if (phase === 'module-check') {
-    const currentMod = modules[moduleIndex]
     return (
       <div className="max-w-2xl mx-auto">
         <div className="mb-6">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-semibold text-primary uppercase tracking-wide">Module Check</span>
-            <span className="text-xs text-muted-foreground">· {moduleIndex + 1} of {modules.length}</span>
+            <span className="text-xs font-semibold text-primary uppercase tracking-wide">Section Check</span>
+            <span className="text-xs text-muted-foreground">· {sectionIndex + 1} of {sections.length}</span>
           </div>
-          <h1 className="text-xl font-bold">{currentMod?.title}</h1>
+          <h1 className="text-xl font-bold">{currentSection?.title}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Answer these questions to confirm your understanding before moving on.
+            Answer these questions before moving to the next section.
           </p>
         </div>
-
         {loading ? (
           <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
         ) : checkQuestions.length === 0 ? (
           <div className="bg-card border border-border rounded-xl p-6 text-center">
-            <p className="text-muted-foreground">No check questions available — proceeding to next module.</p>
-            <button onClick={completeModule} className="mt-4 bg-primary text-primary-foreground px-6 py-2 rounded-lg text-sm font-medium">
+            <p className="text-muted-foreground text-sm">No check questions available.</p>
+            <button onClick={proceedToNextSection} className="mt-4 bg-primary text-primary-foreground px-6 py-2 rounded-lg text-sm font-medium">
               Continue <ChevronRight className="h-4 w-4 inline" />
             </button>
           </div>
@@ -526,7 +525,7 @@ export default function LearnPage() {
                         'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
                         checkAnswers[i] === opt ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent'
                       )}>
-                        <input type="radio" name={`check-${i}`} value={opt}
+                        <input type="radio" name={`c${i}`} value={opt}
                           checked={checkAnswers[i] === opt}
                           onChange={() => setCheckAnswers((p) => ({ ...p, [i]: opt }))} />
                         <span className="text-sm">{opt}</span>
@@ -536,7 +535,7 @@ export default function LearnPage() {
                 </div>
               ))}
             </div>
-            <button onClick={submitModuleCheck}
+            <button onClick={submitSectionCheck}
               disabled={Object.keys(checkAnswers).length < checkQuestions.length || loading}
               className="mt-6 w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium disabled:opacity-50 flex items-center justify-center gap-2">
               {loading && <Loader2 className="h-4 w-4 animate-spin" />} Submit Check
@@ -552,28 +551,24 @@ export default function LearnPage() {
                 : <XCircle className="h-8 w-8 text-orange-500" />
               }
             </div>
-            <h2 className="text-xl font-bold mb-1">
-              {checkScore >= 60 ? 'Well done!' : 'Keep going!'}
-            </h2>
+            <h2 className="text-xl font-bold mb-1">{checkScore >= 60 ? 'Well done!' : 'Keep going!'}</h2>
             <p className="text-muted-foreground mb-5 text-sm">
-              {checkScore >= 60
-                ? `You answered ${Object.keys(checkAnswers).length}/${checkQuestions.length} questions.`
-                : 'You can review the module or continue to the next one.'}
+              {sectionIndex < sections.length - 1
+                ? `Next: ${sections[sectionIndex + 1]?.title}`
+                : 'You\'ve completed all sections. Time for the final assessment!'
+              }
             </p>
-
             <div className="flex gap-3">
               <button onClick={() => {
                 setPhase('module-learning')
-                startModuleChat(course, moduleIndex, topicName, proficiencyLevel)
-              }} className="flex-1 border border-border py-2.5 rounded-xl text-sm hover:bg-accent transition-colors">
-                Review module
+                startSectionChat(sections, sectionIndex, topicName, proficiencyLevel)
+              }} className="flex-1 border border-border py-2.5 rounded-xl text-sm hover:bg-accent">
+                Review section
               </button>
-              <button onClick={completeModule}
+              <button onClick={proceedToNextSection}
                 className="flex-1 bg-primary text-primary-foreground py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2">
-                {moduleIndex < modules.length - 1
-                  ? `Module ${moduleIndex + 2}: ${modules[moduleIndex + 1]?.title?.slice(0, 20)}…`
-                  : 'Final Assessment'
-                } <ChevronRight className="h-4 w-4" />
+                {sectionIndex < sections.length - 1 ? `Next Section` : 'Final Assessment'}
+                <ChevronRight className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -582,7 +577,7 @@ export default function LearnPage() {
     )
   }
 
-  // ── Final Assessment ──────────────────────────────────────────────────────────
+  // Final Assessment
   if (phase === 'final-assessment') {
     const qs = assessmentQ ?? []
     const answered = Object.keys(answers).length
@@ -595,7 +590,7 @@ export default function LearnPage() {
           </div>
           <h1 className="text-xl font-bold">{topicName}</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            You've completed all {modules.length} modules. This assessment determines your proficiency level.
+            You&apos;ve completed all {sections.length} sections. This determines your final proficiency level.
           </p>
           {qs.length > 0 && (
             <div className="mt-3 flex items-center gap-3">
@@ -607,7 +602,10 @@ export default function LearnPage() {
           )}
         </div>
         {loading || qs.length === 0 ? (
-          <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+          <div className="flex flex-col items-center justify-center py-16 gap-3">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="text-sm text-muted-foreground">Generating final assessment from all documents…</p>
+          </div>
         ) : (
           <>
             <div className="space-y-5">
@@ -639,7 +637,7 @@ export default function LearnPage() {
     )
   }
 
-  // ── Complete ──────────────────────────────────────────────────────────────────
+  // Complete
   if (phase === 'complete' && assessmentResult) {
     return (
       <div className="max-w-lg mx-auto text-center">
@@ -654,23 +652,11 @@ export default function LearnPage() {
             </p>
             <p className="text-5xl font-bold">{assessmentResult.score}%</p>
           </div>
-          {assessmentResult.strengths?.length > 0 && (
-            <div className="text-left mb-4">
-              <p className="text-xs font-semibold text-green-700 mb-1">Strong areas</p>
-              <div className="flex flex-wrap gap-1">
-                {assessmentResult.strengths.map((s: string) => (
-                  <span key={s} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{s}</span>
-                ))}
-              </div>
-            </div>
-          )}
           <div className="flex gap-3 mt-4">
-            <button onClick={() => router.push('/topics')}
-              className="flex-1 border border-border py-2.5 rounded-xl text-sm hover:bg-accent">
+            <button onClick={() => router.push('/topics')} className="flex-1 border border-border py-2.5 rounded-xl text-sm hover:bg-accent">
               Browse Topics
             </button>
-            <button onClick={() => router.push('/progress')}
-              className="flex-1 bg-primary text-primary-foreground py-2.5 rounded-xl text-sm font-medium">
+            <button onClick={() => router.push('/progress')} className="flex-1 bg-primary text-primary-foreground py-2.5 rounded-xl text-sm font-medium">
               My Progress
             </button>
           </div>
@@ -679,41 +665,34 @@ export default function LearnPage() {
     )
   }
 
-  // ── Module Learning (Chat) ────────────────────────────────────────────────────
-  const currentMod = modules[moduleIndex]
+  // ── Module Learning (Chat) ─────────────────────────────────────────────────
 
   return (
     <div className="flex gap-0 h-[calc(100vh-4rem)] -mt-8 -mx-8">
-      {/* Left: Module curriculum */}
-      {modules.length > 0 && (
+      {/* Left: section list */}
+      {sections.length > 0 && (
         <div className="w-56 border-r border-border bg-card flex flex-col flex-shrink-0">
           <div className="px-4 py-3 border-b border-border">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide truncate">
-              {course?.name ?? topicName}
+              {topicName}
             </p>
           </div>
           <nav className="flex-1 overflow-y-auto p-2 space-y-1">
-            {modules.map((mod, i) => (
-              <div key={mod.id} className={cn(
-                'flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-colors',
-                i === moduleIndex
-                  ? 'bg-primary text-primary-foreground'
-                  : completedModules.has(i)
-                  ? 'text-green-700 bg-green-50'
-                  : i < moduleIndex
-                  ? 'text-muted-foreground hover:bg-accent cursor-pointer'
-                  : 'text-muted-foreground opacity-50'
+            {sections.map((sec, i) => (
+              <div key={sec.id} className={cn(
+                'flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs transition-colors',
+                i === sectionIndex ? 'bg-primary text-primary-foreground' :
+                completedSections.has(i) ? 'text-green-700 bg-green-50' :
+                i < sectionIndex ? 'text-muted-foreground hover:bg-accent cursor-pointer' :
+                'text-muted-foreground opacity-50'
               )}>
-                <span className="w-5 h-5 rounded-full border flex items-center justify-center text-xs flex-shrink-0"
-                  style={{ borderColor: 'currentColor' }}>
-                  {completedModules.has(i) ? '✓' : i + 1}
+                <span className="w-5 h-5 rounded-full border flex items-center justify-center flex-shrink-0" style={{ borderColor: 'currentColor' }}>
+                  {completedSections.has(i) ? '✓' : i + 1}
                 </span>
-                <span className="truncate text-xs">{mod.title}</span>
+                <span className="truncate">{sec.title}</span>
               </div>
             ))}
-            <div className={cn(
-              'flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs text-muted-foreground opacity-50'
-            )}>
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs text-muted-foreground opacity-50">
               <Trophy className="h-3.5 w-3.5 flex-shrink-0" />
               <span>Final Assessment</span>
             </div>
@@ -721,15 +700,14 @@ export default function LearnPage() {
         </div>
       )}
 
-      {/* Right: Chat */}
+      {/* Chat */}
       <div className="flex-1 flex flex-col">
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-card flex-shrink-0">
           <div className="flex items-center gap-3">
             <BookOpen className="h-4 w-4 text-primary" />
             <div>
               <p className="text-sm font-semibold">
-                {currentMod ? `Module ${moduleIndex + 1}: ${currentMod.title}` : topicName}
+                {currentSection ? `${sectionIndex + 1}/${sections.length}: ${currentSection.title}` : topicName}
               </p>
               <span className={`text-xs px-2 py-0.5 rounded-full ${getProficiencyColor(proficiencyLevel)}`}>
                 {proficiencyLevel}
@@ -744,17 +722,16 @@ export default function LearnPage() {
               </button>
             )}
             {messages.length > 1 && (
-              <button onClick={startModuleCheck}
+              <button onClick={startSectionCheck}
                 className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-lg flex items-center gap-1.5">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                Module Check
+                Section Check
               </button>
             )}
           </div>
         </div>
 
         <div className="flex flex-1 overflow-hidden">
-          {/* Messages */}
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
             {messages.map((msg, i) => (
               <div key={i} className={cn('flex', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
@@ -784,9 +761,7 @@ export default function LearnPage() {
                 <div className="bg-card border border-border rounded-2xl rounded-bl-sm px-4 py-3">
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-sm">
-                      {messages.length === 0 ? 'Preparing your lesson…' : 'Thinking…'}
-                    </span>
+                    <span className="text-sm">{messages.length === 0 ? 'Preparing your lesson…' : 'Thinking…'}</span>
                   </div>
                 </div>
               </div>
@@ -794,7 +769,6 @@ export default function LearnPage() {
             <div ref={bottomRef} />
           </div>
 
-          {/* Sources panel */}
           {showSources && (
             <div className="w-64 border-l border-border bg-card flex flex-col">
               <div className="flex items-center justify-between p-3 border-b border-border">
@@ -814,10 +788,9 @@ export default function LearnPage() {
           )}
         </div>
 
-        {/* Input */}
         <form onSubmit={sendMessage} className="border-t border-border p-4 flex gap-3 bg-card flex-shrink-0">
           <input value={input} onChange={(e) => setInput(e.target.value)}
-            placeholder={`Ask about ${currentMod?.title ?? topicName}…`}
+            placeholder={`Ask about ${currentSection?.title ?? topicName}…`}
             className="flex-1 px-4 py-2.5 border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 bg-background" />
           <button type="submit" disabled={!input.trim() || loading}
             className="bg-primary text-primary-foreground px-4 py-2.5 rounded-xl disabled:opacity-50">
