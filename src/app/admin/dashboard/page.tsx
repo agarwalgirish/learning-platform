@@ -1,32 +1,7 @@
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { Users, BookOpen, FileText, Award, TrendingUp, Activity } from 'lucide-react'
-
-function dayLabel(date: Date): string {
-  const today = new Date()
-  const yesterday = new Date(today)
-  yesterday.setDate(today.getDate() - 1)
-
-  const fmt = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-  if (fmt(date) === fmt(today)) return 'Today'
-  if (fmt(date) === fmt(yesterday)) return 'Yesterday'
-  return date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
-}
-
-function timeLabel(date: Date): string {
-  return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-}
-
-function groupByDay<T extends { createdAt: Date }>(items: T[]): Map<string, T[]> {
-  const groups = new Map<string, T[]>()
-  for (const item of items) {
-    const key = item.createdAt.toLocaleDateString('en-GB')
-    const group = groups.get(key) ?? []
-    group.push(item)
-    groups.set(key, group)
-  }
-  return groups
-}
+import { ActivityFeed } from '@/components/admin/activity-feed'
 
 export const metadata = { title: 'Admin Dashboard' }
 
@@ -114,52 +89,21 @@ export default async function AdminDashboardPage() {
           </div>
         </div>
 
-        {/* Recent audit log — grouped by day */}
+        {/* Recent audit log — grouped by day, scrollable, collapsible */}
         <div className="bg-card border border-border rounded-xl p-6">
           <div className="flex items-center gap-2 mb-4">
             <Activity className="h-4 w-4 text-primary" />
             <h2 className="font-semibold">Recent Activity</h2>
           </div>
-
-          {recentActivity.length === 0 ? (
-            <p className="text-muted-foreground text-sm text-center py-6">No activity yet</p>
-          ) : (
-            <div className="space-y-4">
-              {Array.from(groupByDay(recentActivity)).map(([dayKey, logs]) => (
-                <div key={dayKey}>
-                  {/* Day header */}
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      {dayLabel(logs[0].createdAt)}
-                    </span>
-                    <div className="flex-1 h-px bg-border" />
-                  </div>
-
-                  {/* Events for this day */}
-                  <div className="space-y-2">
-                    {logs.map((log) => (
-                      <div key={log.id} className="flex items-start gap-3">
-                        <div className="w-2 h-2 rounded-full bg-primary mt-1.5 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm leading-snug">
-                            <span className="font-medium">
-                              {log.user?.name ?? log.user?.email ?? 'System'}
-                            </span>{' '}
-                            <span className="text-muted-foreground">
-                              {formatAction(log.action)}
-                            </span>
-                          </p>
-                        </div>
-                        <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0 mt-0.5">
-                          {timeLabel(log.createdAt)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <ActivityFeed
+            entries={recentActivity.map((log) => ({
+              id: log.id,
+              action: log.action,
+              userName: log.user?.name ?? null,
+              userEmail: log.user?.email ?? null,
+              createdAt: log.createdAt.toISOString(),
+            }))}
+          />
         </div>
       </div>
 
@@ -202,12 +146,3 @@ function StatCard({ icon, label, value, sub, bg }: {
   )
 }
 
-function formatAction(action: string): string {
-  const map: Record<string, string> = {
-    'user.login': 'signed in',
-    'document.upload': 'uploaded a document',
-    'assessment.complete': 'completed an assessment',
-    'quiz.complete': 'completed a quiz',
-  }
-  return map[action] ?? action
-}
