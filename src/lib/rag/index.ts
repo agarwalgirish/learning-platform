@@ -1,5 +1,5 @@
 import { searchSimilarChunks } from '@/lib/vector'
-import { getAIProvider } from '@/lib/ai'
+import { getAIProviderForOrg } from '@/lib/ai'
 import type { AIMessage } from '@/lib/ai'
 import type { DocumentChunkWithScore, TutorMessage } from '@/types'
 
@@ -33,6 +33,7 @@ export async function generateTutorResponse(
     organizationId: string
     proficiencyLevel: string
     query: string
+    userId?: string
   }
 ): Promise<RAGResponse> {
   // Retrieve relevant chunks from the knowledge base
@@ -68,7 +69,7 @@ ${contextText}`,
     .slice(-10) // Keep last 10 messages for context window efficiency
     .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
-  const provider = getAIProvider()
+  const provider = await getAIProviderForOrg(context.organizationId, context.userId)
   const result = await provider.complete([systemMessage, ...chatMessages], {
     temperature: 0.7,
     maxTokens: 1500,
@@ -97,7 +98,7 @@ export async function generateDiagnosticQuestions(
     .join('\n\n')
     .slice(0, 4000)
 
-  const provider = getAIProvider()
+  const provider = await getAIProviderForOrg(organizationId)
   const result = await provider.complete(
     [
       {
@@ -159,7 +160,7 @@ export async function generateQuizQuestions(
     .join('\n\n')
     .slice(0, 3000)
 
-  const provider = getAIProvider()
+  const provider = await getAIProviderForOrg(organizationId)
   const result = await provider.complete(
     [
       {

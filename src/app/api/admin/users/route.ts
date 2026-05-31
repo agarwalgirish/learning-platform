@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
         isActive: true,
         lastLoginAt: true,
         createdAt: true,
+        aiOverride: true,
         _count: {
           select: { enrollments: true },
         },

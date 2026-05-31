@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
   const response = await generateTutorResponse(messages, {
     topicId,
     organizationId: user.organizationId,
+    userId: user.id,
     proficiencyLevel,
     query: message,
   })
