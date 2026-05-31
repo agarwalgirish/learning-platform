@@ -12,7 +12,8 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset --force && tsx prisma/seed.ts"
+    "db:reset": "prisma migrate reset --force && tsx prisma/seed.ts",
+    "embed:set-dim": "tsx scripts/set-embedding-dimensions.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.31.0",

@@ -1,6 +1,7 @@
 import type { AIProvider } from './types'
 import { OpenAIProvider } from './openai-provider'
 import { AnthropicProvider } from './anthropic-provider'
+import { OllamaProvider } from './ollama-provider'
 
 export type {
   AIProvider,
@@ -20,20 +21,30 @@ export function getAIProvider(): AIProvider {
     case 'anthropic':
       _aiProvider = new AnthropicProvider()
       break
+    case 'ollama':
+      _aiProvider = new OllamaProvider()
+      break
     default:
       _aiProvider = new OpenAIProvider()
   }
   return _aiProvider
 }
 
-// Embeddings always use OpenAI — Anthropic doesn't offer an embeddings API
 export function getEmbeddingProvider(): AIProvider {
   if (_embeddingProvider) return _embeddingProvider
-  _embeddingProvider = new OpenAIProvider()
+
+  const embedProvider = process.env.EMBEDDING_PROVIDER ?? process.env.AI_PROVIDER ?? 'openai'
+  switch (embedProvider) {
+    case 'ollama':
+      _embeddingProvider = new OllamaProvider()
+      break
+    default:
+      // Anthropic has no embeddings API — fall back to OpenAI
+      _embeddingProvider = new OpenAIProvider()
+  }
   return _embeddingProvider
 }
 
-// Reset providers (useful in tests or when config changes)
 export function resetProviders(): void {
   _aiProvider = null
   _embeddingProvider = null
