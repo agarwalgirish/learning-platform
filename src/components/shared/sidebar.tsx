@@ -32,8 +32,9 @@ const learnerNav: NavItem[] = [
 
 const adminNav: NavItem[] = [
   { label: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
-  { label: 'Users', href: '/admin/users', icon: Users },
+  { label: 'Topics', href: '/admin/topics', icon: BookOpen },
   { label: 'Content', href: '/admin/content', icon: Upload },
+  { label: 'Users', href: '/admin/users', icon: Users },
   { label: 'Reports', href: '/admin/reports', icon: BarChart3 },
   { label: 'Settings', href: '/admin/settings', icon: Settings },
 ]

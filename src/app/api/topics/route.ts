@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
         select: {
           documents: true,
           enrollments: true,
+          courses: true,
         },
       },
     },
