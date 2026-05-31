@@ -5,6 +5,14 @@
  * Run with: npm run db:seed
  */
 
+import { config } from 'dotenv'
+import { resolve } from 'path'
+
+// Load .env then .env.local so credentials are available whether running via
+// `npm run db:seed` (needs .env) or next.js server (uses .env.local)
+config({ path: resolve(process.cwd(), '.env') })
+config({ path: resolve(process.cwd(), '.env.local'), override: true })
+
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 
