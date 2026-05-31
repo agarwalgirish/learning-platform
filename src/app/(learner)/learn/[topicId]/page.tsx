@@ -51,7 +51,7 @@ export default function LearnPage() {
       if (data.alreadyAssessed) {
         setProficiencyLevel(data.level)
         setPhase('learning')
-        addWelcomeMessage(data.level)
+        await generateIntroduction(data.level)
       } else {
         setAssessment({
           assessmentId: data.assessmentId,
@@ -69,14 +69,43 @@ export default function LearnPage() {
     }
   }
 
-  function addWelcomeMessage(level: string) {
-    setMessages([
-      {
-        role: 'assistant',
-        content: `Welcome! Based on your assessment, you're at the **${level}** level. I'm your AI tutor for this topic. Ask me anything — I'll teach using your organization's knowledge base and cite every source I use.\n\nWhat would you like to learn first?`,
-        timestamp: new Date().toISOString(),
-      },
-    ])
+  async function generateIntroduction(level: string) {
+    setLoading(true)
+    try {
+      const introPrompt =
+        `Please introduce this topic to me as a ${level} level learner. ` +
+        `Give me a structured overview: what this topic is about, why it matters, ` +
+        `and the key concepts I'll learn today. Then begin teaching me the first ` +
+        `and most fundamental concept with a clear explanation and a practical example.`
+
+      const res = await fetch('/api/learn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topicId, message: introPrompt, history: [] }),
+      })
+      const data = await res.json()
+
+      setMessages([
+        {
+          role: 'assistant',
+          content: data.content,
+          sources: data.sources,
+          timestamp: new Date().toISOString(),
+        },
+      ])
+      if (data.sources?.length) setSources(data.sources)
+    } catch {
+      // Fallback to static message if AI call fails
+      setMessages([
+        {
+          role: 'assistant',
+          content: `Welcome! I'm your AI tutor for this topic. You're at the **${level}** level. Ask me anything to get started.`,
+          timestamp: new Date().toISOString(),
+        },
+      ])
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function submitAssessment() {
@@ -104,11 +133,10 @@ export default function LearnPage() {
     setLoading(false)
   }
 
-  function startLearning() {
+  async function startLearning() {
     setPhase('learning')
-    if (assessment?.result) {
-      addWelcomeMessage(assessment.result.level)
-    }
+    const level = assessment?.result?.level ?? proficiencyLevel
+    await generateIntroduction(level)
   }
 
   async function sendMessage(e: React.FormEvent) {
@@ -288,9 +316,13 @@ export default function LearnPage() {
 
           <button
             onClick={startLearning}
-            className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium flex items-center justify-center gap-2"
+            disabled={loading}
+            className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium flex items-center justify-center gap-2 disabled:opacity-70"
           >
-            Start Learning <ChevronRight className="h-4 w-4" />
+            {loading
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Preparing your lesson…</>
+              : <>Start Learning <ChevronRight className="h-4 w-4" /></>
+            }
           </button>
         </div>
       </div>
@@ -379,7 +411,9 @@ export default function LearnPage() {
               <div className="bg-card border border-border rounded-2xl rounded-bl-sm px-4 py-3">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  <span className="text-sm">Thinking...</span>
+                  <span className="text-sm">
+                    {messages.length === 0 ? 'Preparing your lesson…' : 'Thinking…'}
+                  </span>
                 </div>
               </div>
             </div>
