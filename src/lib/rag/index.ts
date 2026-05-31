@@ -9,30 +9,23 @@ export interface RAGResponse {
   tokensUsed: number
 }
 
-// getAIProviderForOrg with user-level override support
-async function resolveProvider(organizationId: string, userId?: string) {
+// Resolve AI provider from org-level AIConfig, fall back to env var
+async function resolveProvider(organizationId: string) {
   try {
     const { db } = await import('@/lib/db')
     const { OpenAIProvider } = await import('@/lib/ai/openai-provider')
     const { AnthropicProvider } = await import('@/lib/ai/anthropic-provider')
 
-    function build(name: string) {
-      if (name === 'anthropic') return new AnthropicProvider()
-      return new OpenAIProvider()
-    }
-
-    if (userId) {
-      const user = await db.user.findUnique({ where: { id: userId }, select: { aiOverride: true } })
-      const override = user?.aiOverride as { provider?: string } | null
-      if (override?.provider) return build(override.provider)
-    }
-
     const config = await db.aIConfig.findUnique({
       where: { organizationId },
       select: { provider: true },
     })
-    if (config?.provider) return build(config.provider)
-  } catch {}
+    if (config?.provider) {
+      return config.provider === 'anthropic' ? new AnthropicProvider() : new OpenAIProvider()
+    }
+  } catch (err) {
+    console.error('[rag] resolveProvider failed, using default:', err)
+  }
   return getAIProvider()
 }
 
@@ -57,7 +50,7 @@ export async function generateTutorResponse(
     organizationId: string
     proficiencyLevel: string
     query: string
-    userId?: string
+    userId?: string  // kept for API compatibility; user-level override not active on this branch
   }
 ): Promise<RAGResponse> {
   const topic = context.topicName || 'this topic'
@@ -102,7 +95,7 @@ ${contextText}`
     .slice(-10)
     .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
-  const provider = await resolveProvider(context.organizationId, context.userId)
+  const provider = await resolveProvider(context.organizationId)
   const result = await provider.complete([systemMessage, ...chatMessages], {
     temperature: 0.4, // Lower temperature = more faithful to source material
     maxTokens: 1500,

@@ -184,15 +184,20 @@ export default function LearnPage() {
         body: JSON.stringify({ topicId, message: prompt, history: [] }),
       })
       const data = await res.json()
+      const content = data.content
+      if (!content) {
+        throw new Error(data.error || data.detail || 'Empty response from AI')
+      }
       setMessages([{
-        role: 'assistant', content: data.content,
-        sources: data.sources, timestamp: new Date().toISOString(),
+        role: 'assistant', content,
+        sources: data.sources ?? [], timestamp: new Date().toISOString(),
       }])
       if (data.sources?.length) setSources(data.sources)
-    } catch {
+    } catch (err: any) {
+      console.error('[learn] startSectionChat failed:', err)
       setMessages([{
         role: 'assistant',
-        content: `Let's study **${sec?.title ?? topic}**. Ask me anything about this section.`,
+        content: `⚠️ The AI tutor couldn't load content for **${sec?.title ?? topic}**.\n\n**Error:** ${err?.message ?? 'Unknown error'}\n\nPlease try asking a question below, or go to Admin → Content → Documents and click **⚡ Re-embed documents**.`,
         timestamp: new Date().toISOString(),
       }])
     } finally {
